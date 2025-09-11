@@ -1,0 +1,3 @@
+[submodule "TorFS"]
+	path = plugin/torfs
+	url = https://github.com/locomotiivo/TorFS
