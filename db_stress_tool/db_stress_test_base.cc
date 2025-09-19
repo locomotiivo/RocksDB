@@ -1692,7 +1692,9 @@ Status StressTest::TestMultiScan(ThreadState* thread,
 
   std::vector<std::string> start_key_strs;
   std::vector<std::string> end_key_strs;
-  MultiScanArgs scan_opts;
+  // TODO support reverse BytewiseComparator in the stress test
+  MultiScanArgs scan_opts(BytewiseComparator());
+  scan_opts.use_async_io = FLAGS_multiscan_use_async_io;
   start_key_strs.reserve(num_scans);
   end_key_strs.reserve(num_scans);
 
@@ -1818,11 +1820,14 @@ Status StressTest::TestMultiScan(ThreadState* thread,
                      key, op_logs, verify_func, &diverged);
 
       if (diverged) {
-        const std::vector<ScanOptions>& scanoptions = scan_opts.GetScanRanges();
-        for (const auto& t : scanoptions) {
-          fprintf(stdout, "Multiscan options: %s to %s \n",
-                  t.range.start.value().ToString(true).c_str(),
-                  t.range.limit.value().ToString(true).c_str());
+        if (thread->shared->HasVerificationFailedYet()) {
+          const std::vector<ScanOptions>& scanoptions =
+              scan_opts.GetScanRanges();
+          for (const auto& t : scanoptions) {
+            fprintf(stdout, "Multiscan options: %s to %s \n",
+                    t.range.start.value().ToString(true).c_str(),
+                    t.range.limit.value().ToString(true).c_str());
+          }
         }
         break;
       }
@@ -3669,8 +3674,8 @@ void StressTest::Open(SharedState* shared, bool reopen) {
               "Compaction\n");
       exit(1);
     }
-    options_.compaction_service =
-        std::make_shared<DbStressCompactionService>(shared);
+    options_.compaction_service = std::make_shared<DbStressCompactionService>(
+        shared, FLAGS_remote_compaction_failure_fall_back_to_local);
   }
 
   if ((options_.enable_blob_files || options_.enable_blob_garbage_collection ||
@@ -4437,6 +4442,8 @@ void InitializeOptionsFromFlags(
       FLAGS_memtable_protection_bytes_per_key;
   options.block_protection_bytes_per_key = FLAGS_block_protection_bytes_per_key;
   options.paranoid_memory_checks = FLAGS_paranoid_memory_checks;
+  options.memtable_veirfy_per_key_checksum_on_seek =
+      FLAGS_memtable_veirfy_per_key_checksum_on_seek;
 
   // Integrated BlobDB
   options.enable_blob_files = FLAGS_enable_blob_files;

@@ -857,6 +857,10 @@ DEFINE_int32(remote_compaction_worker_interval, 10,
              "Remote Compaction Worker Thread dequeue tasks every N "
              "milliseconds. (Default: 10ms)");
 
+DEFINE_bool(remote_compaction_failure_fall_back_to_local, true,
+            "If true, remote compaction failures will be ignored and "
+            "compactions will fall back to local and retried");
+
 DEFINE_uint32(ingest_wbwi_one_in, 0,
               "If set, will call"
               "IngestWriteBatchWithIndex() instead of regular write operations "
@@ -1480,6 +1484,11 @@ DEFINE_bool(paranoid_memory_checks,
             ROCKSDB_NAMESPACE::Options().paranoid_memory_checks,
             "Sets CF option paranoid_memory_checks.");
 
+DEFINE_bool(
+    memtable_veirfy_per_key_checksum_on_seek,
+    ROCKSDB_NAMESPACE::Options().memtable_veirfy_per_key_checksum_on_seek,
+    "Sets CF option memtable_veirfy_per_key_checksum_on_seek.");
+
 DEFINE_uint32(commit_bypass_memtable_one_in, 0,
               "If greater than zero, transaction option will set "
               "commit_bypass_memtable to per every N transactions on average.");
@@ -1530,5 +1539,8 @@ DEFINE_bool(
 
 DEFINE_bool(use_multiscan, false,
             "If set, use the batched MultiScan API for scans.");
+
+DEFINE_bool(multiscan_use_async_io, false,
+            "If set, enable async_io for MultiScan operations.");
 
 #endif  // GFLAGS
