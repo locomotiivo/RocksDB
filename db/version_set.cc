@@ -1181,15 +1181,25 @@ class LevelIterator final : public InternalIterator {
       // 3. [  S  ] ...... [  E  ]
       for (auto i = fstart; i <= fend; i++) {
         if (i < flevel_->num_files) {
-          auto args = GetMultiScanArgForFile(i);
+          // FindFile only compares against the largest_key, so we need this
+          // additional check to ensure the scan range overlaps the file
+          if (icomparator_.InternalKeyComparator::Compare(
+                  iend.Encode(), flevel_->files[i].smallest_key) < 0) {
+            continue;
+          }
+          auto const metadata = flevel_->files[i].file_metadata;
+          if (metadata->num_entries == metadata->num_range_deletions) {
+            // Skip range deletion only files.
+            continue;
+          }
+          auto& args = GetMultiScanArgForFile(i);
           args.insert(start.value(), end.value(), opt.property_bag);
         }
       }
     }
-    // Propagate io colaescing threshold
+    // Propagate multiscan configs
     for (auto& file_to_arg : *file_to_scan_opts_) {
-      file_to_arg.second.io_coalesce_threshold = so->io_coalesce_threshold;
-      file_to_arg.second.use_async_io = so->use_async_io;
+      file_to_arg.second.CopyConfigFrom(*so);
     }
   }
 
@@ -1264,6 +1274,10 @@ class LevelIterator final : public InternalIterator {
               *read_options_.iterate_lower_bound, /*b_has_ts=*/false) < 0;
     }
   }
+
+#ifndef NDEBUG
+  bool OverlapRange(const ScanOptions& opts);
+#endif
 
   TableCache* table_cache_;
   const ReadOptions& read_options_;
@@ -1362,6 +1376,14 @@ void LevelIterator::Seek(const Slice& target) {
   }
 
   if (file_iter_.iter() != nullptr) {
+    if (scan_opts_) {
+      // At this point, we only know that the seek target is < largest_key
+      // in the file. We need to check whether there is actual overlap.
+      const FdWithKeyRange& cur_file = flevel_->files[file_index_];
+      if (KeyReachedUpperBound(cur_file.smallest_key)) {
+        return;
+      }
+    }
     file_iter_.Seek(target);
     // Status::TryAgain indicates asynchronous request for retrieval of data
     // blocks has been submitted. So it should return at this point and Seek
@@ -1639,6 +1661,19 @@ void LevelIterator::SkipEmptyFileBackward() {
   }
 }
 
+#ifndef NDEBUG
+bool LevelIterator::OverlapRange(const ScanOptions& opts) {
+  return (user_comparator_.CompareWithoutTimestamp(
+              opts.range.start.value(), /*a_has_ts=*/false,
+              ExtractUserKey(flevel_->files[file_index_].largest_key),
+              /*b_has_ts=*/true) <= 0 &&
+          user_comparator_.CompareWithoutTimestamp(
+              opts.range.limit.value(), /*a_has_ts=*/false,
+              ExtractUserKey(flevel_->files[file_index_].smallest_key),
+              /*b_has_ts=*/true) > 0);
+}
+#endif
+
 void LevelIterator::SetFileIterator(InternalIterator* iter) {
   if (pinned_iters_mgr_ && iter) {
     iter->SetPinnedItersMgr(pinned_iters_mgr_);
@@ -1648,9 +1683,9 @@ void LevelIterator::SetFileIterator(InternalIterator* iter) {
   if (iter && scan_opts_) {
     if (FileHasMultiScanArg(file_index_)) {
       const MultiScanArgs& new_opts = GetMultiScanArgForFile(file_index_);
+      assert(OverlapRange(*new_opts.GetScanRanges().begin()) &&
+             OverlapRange(*new_opts.GetScanRanges().rbegin()));
       file_iter_.Prepare(&new_opts);
-    } else {
-      file_iter_.Prepare(scan_opts_);
     }
   }
 

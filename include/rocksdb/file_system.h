@@ -24,6 +24,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <shared_mutex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -89,6 +90,7 @@ enum FSSupportedOps {
   kVerifyAndReconstructRead,  // Supports a higher level of data integrity. See
                               // the verify_and_reconstruct_read flag in
                               // IOOptions.
+  kFSPrefetch,                // Supports prefetch operations
 };
 
 // Per-request options that can be passed down to the FileSystem
@@ -253,6 +255,10 @@ struct IODebugContext {
 
   // Arbitrary structure containing cost information about the IO request
   std::any cost_info;
+
+  // FileSystem implementations can use this mutex to synchronize concurrent
+  // reads/writes as needed (e.g. to update the counters or cost_info field)
+  std::shared_mutex mutex;
 
   IODebugContext() {}
 
@@ -606,18 +612,6 @@ class FileSystem : public Customizable {
         "LinkFile is not supported for this FileSystem");
   }
 
-  // Sync the file content to file system.
-  // The default implementation would open, sync and close the file.
-  // This function could be overridden with no-op, if the file system
-  // automatically sync the data when file is closed.
-  // This is used when a user-provided file, probably unsynced, is pulled into a
-  // context where power-outage-proof persistence is required (e.g.
-  // IngestExternalFile without copy).
-  virtual IOStatus SyncFile(const std::string& fname,
-                            const FileOptions& file_options,
-                            const IOOptions& io_options, bool use_fsync,
-                            IODebugContext* dbg);
-
   virtual IOStatus NumFileLinks(const std::string& /*fname*/,
                                 const IOOptions& /*options*/,
                                 uint64_t* /*count*/, IODebugContext* /*dbg*/) {
@@ -778,12 +772,13 @@ class FileSystem : public Customizable {
   //  If async_io is supported by the underlying FileSystem, then supported_ops
   //  will have corresponding bit (i.e FSSupportedOps::kAsyncIO) set to 1.
   //
-  // By default, async_io operation is set and FS should override this API and
-  // set all the operations they support provided in FSSupportedOps (including
-  // async_io).
+  // By default, async_io and prefetch operation are set and FS should override
+  // this API and set all the operations they support provided in FSSupportedOps
+  // (including async_io and prefetch).
   virtual void SupportedOps(int64_t& supported_ops) {
     supported_ops = 0;
     supported_ops |= (1 << FSSupportedOps::kAsyncIO);
+    supported_ops |= (1 << FSSupportedOps::kFSPrefetch);
   }
 
   // If you're adding methods here, remember to add them to EnvWrapper too.
@@ -1602,12 +1597,6 @@ class FileSystemWrapper : public FileSystem {
   IOStatus LinkFile(const std::string& s, const std::string& t,
                     const IOOptions& options, IODebugContext* dbg) override {
     return target_->LinkFile(s, t, options, dbg);
-  }
-
-  IOStatus SyncFile(const std::string& fname, const FileOptions& file_options,
-                    const IOOptions& io_options, bool use_fsync,
-                    IODebugContext* dbg) override {
-    return target_->SyncFile(fname, file_options, io_options, use_fsync, dbg);
   }
 
   IOStatus NumFileLinks(const std::string& fname, const IOOptions& options,

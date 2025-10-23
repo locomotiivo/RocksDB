@@ -1848,7 +1848,7 @@ class MultiScanArgs {
   operator std::vector<ScanOptions>*() { return &original_ranges_; }
 
   operator const std::vector<ScanOptions>*() const { return &original_ranges_; }
-  // Destructor
+
   ~MultiScanArgs() {}
 
   const std::vector<ScanOptions>& GetScanRanges() const {
@@ -1856,6 +1856,14 @@ class MultiScanArgs {
   }
 
   const Comparator* GetComparator() const { return comp_; }
+
+  // Copies the configurations (excluding actual scan ranges) from another
+  // MultiScanArgs.
+  void CopyConfigFrom(const MultiScanArgs& other) {
+    io_coalesce_threshold = other.io_coalesce_threshold;
+    max_prefetch_size = other.max_prefetch_size;
+    use_async_io = other.use_async_io;
+  }
 
   uint64_t io_coalesce_threshold = 16 << 10;  // 16KB by default
 
@@ -2316,6 +2324,23 @@ struct FlushOptions {
   FlushOptions() : wait(true), allow_write_stall(false) {}
 };
 
+struct FlushWALOptions {
+  // If true, it calls `SyncWAL()` afterwards.
+  // Default: false
+  bool sync;
+
+  // For IO operations associated with flushing the WAL, charge the internal
+  // rate limiter (see `DBOptions::rate_limiter`) at the specified priority and
+  // pass the priority down to the file system through
+  // `IOOptions::rate_limiter_priority`. The special value `Env::IO_TOTAL`
+  // disables charging the rate limiter.
+  //
+  // Default: `Env::IO_TOTAL`
+  Env::IOPriority rate_limiter_priority;
+
+  FlushWALOptions() : sync(false), rate_limiter_priority(Env::IO_TOTAL) {}
+};
+
 // Create a Logger from provided DBOptions
 Status CreateLoggerFromOptions(const std::string& dbname,
                                const DBOptions& options,
@@ -2352,6 +2377,11 @@ struct CompactionOptions {
   // NOTE: Calling DisableManualCompaction() will not override the
   // canceled variable in CompactionOptions, as it does for CompactRangeOptions
   // - this is because ManualCompactionState is not used
+
+  // Create output compaction file using this file temperature. If unset, will
+  // default to "last_level_temperature" if output level is last level otherwise
+  // "default_write_temperature"
+  Temperature output_temperature_override = Temperature::kUnknown;
 
   CompactionOptions()
       : compression(kDisableCompressionOption),
@@ -2778,6 +2808,43 @@ struct CompactionServiceOptionsOverride {
 struct OpenAndCompactOptions {
   // Allows cancellation of an in-progress compaction.
   std::atomic<bool>* canceled = nullptr;
+
+  // EXPERIMENTAL
+  //
+  // Controls whether OpenAndCompact() should attempt to resume from previously
+  // persisted compaction progress or start fresh.
+  //
+  // When `allow_resumption = true`:
+  // - OpenAndCompact() attempts to resume from previously persisted compaction
+  //   progress stored in `output_directory`
+  // - During execution, it periodically persists new progress to the same
+  //   directory, allowing future calls to continue from where the previous
+  //   compaction left off.
+  // - Fallback behavior: If resumption cannot be fulfilled (e.g., due to
+  //   corrupted or missing resume state), the system will attempt to start a
+  //   fresh compaction as a best-effort fallback by cleaning related files in
+  //   the `output_directory` to achieve a clean state. If even the fresh
+  //   compaction cannot be started, a non-OK status will be returned.
+  // - Important: Resume attempts will be ineffective if the underlying
+  //   conditions that caused the previous OpenAndCompact() failure still
+  //   persist. The same non-OK status will likely be returned unless the root
+  //   cause has been resolved.
+  // - Progress persistence is sequential and best-effort, triggered upon
+  //   completion of each new output file. If compaction is interrupted while
+  //   creating an output file (before its completion), that partial work will
+  //   need to be redone upon resumption.
+  //
+  // When `allow_resumption = false`:
+  // - OpenAndCompact() starts a fresh compaction from scratch.
+  // - No progress will be saved during execution, so interruptions require
+  //   starting over completely.
+  // - CRITICAL REQUIREMENT: The `output_directory` associated MUST be empty
+  //   before calling OpenAndCompact(). Any existing files (including resume
+  //   state or output files from previous runs) may cause correctness errors.
+  //
+  // Limitation: Currently incompatible with paranoid_file_checks=true. The
+  // option is effectively disabled when `paranoid_file_checks` is enabled.
+  bool allow_resumption = false;
 };
 
 struct LiveFilesStorageInfoOptions {

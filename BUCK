@@ -425,6 +425,7 @@ rocks_cpp_library_wrapper(name="rocksdb_stress_lib", srcs=[
         "db_stress_tool/batched_ops_stress.cc",
         "db_stress_tool/cf_consistency_stress.cc",
         "db_stress_tool/db_stress_common.cc",
+        "db_stress_tool/db_stress_compaction_service.cc",
         "db_stress_tool/db_stress_compression_manager.cc",
         "db_stress_tool/db_stress_driver.cc",
         "db_stress_tool/db_stress_filters.cc",
@@ -5189,6 +5190,12 @@ cpp_unittest_wrapper(name="histogram_test",
 
 cpp_unittest_wrapper(name="import_column_family_test",
             srcs=["db/import_column_family_test.cc"],
+            deps=[":rocksdb_test_lib"],
+            extra_compiler_flags=[])
+
+
+cpp_unittest_wrapper(name="index_builder_test",
+            srcs=["table/block_based/index_builder_test.cc"],
             deps=[":rocksdb_test_lib"],
             extra_compiler_flags=[])
 

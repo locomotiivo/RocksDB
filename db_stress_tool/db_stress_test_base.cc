@@ -428,8 +428,9 @@ bool StressTest::BuildOptionsTable() {
     options_tbl.emplace(
         "file_temperature_age_thresholds",
         std::vector<std::string>{
-            "{{temperature=kWarm;age=10}:{temperature=kCold;age=50}:{"
-            "temperature=kIce;age=250}}",
+            "{{temperature=kWarm;age=10}:{temperature=kCool;age=30}:{"
+            "temperature=kCold;age=100}:{"
+            "temperature=kIce;age=300}}",
             "{{temperature=kWarm;age=30}:{temperature=kCold;age=300}}",
             "{{temperature=kCold;age=100}}", "{}"});
     options_tbl.emplace(
@@ -1693,7 +1694,7 @@ Status StressTest::TestMultiScan(ThreadState* thread,
   std::vector<std::string> start_key_strs;
   std::vector<std::string> end_key_strs;
   // TODO support reverse BytewiseComparator in the stress test
-  MultiScanArgs scan_opts(BytewiseComparator());
+  MultiScanArgs scan_opts(options_.comparator);
   scan_opts.use_async_io = FLAGS_multiscan_use_async_io;
   start_key_strs.reserve(num_scans);
   end_key_strs.reserve(num_scans);
@@ -3674,8 +3675,21 @@ void StressTest::Open(SharedState* shared, bool reopen) {
               "Compaction\n");
       exit(1);
     }
-    options_.compaction_service = std::make_shared<DbStressCompactionService>(
+    // Each DB open/reopen gets a fresh compaction service instance with a clean
+    // aborted_ state
+    auto compaction_service = std::make_shared<DbStressCompactionService>(
         shared, FLAGS_remote_compaction_failure_fall_back_to_local);
+
+    options_.compaction_service = compaction_service;
+  }
+
+  if (FLAGS_allow_resumption_one_in > 0) {
+    if (FLAGS_remote_compaction_worker_threads == 0) {
+      fprintf(stderr,
+              "allow_resumption or randomize_allow_resumption requires "
+              "remote_compaction_worker_threads > 0\n");
+      exit(1);
+    }
   }
 
   if ((options_.enable_blob_files || options_.enable_blob_garbage_collection ||
@@ -4318,6 +4332,10 @@ void InitializeOptionsFromFlags(
       static_cast<BlockBasedTableOptions::IndexShorteningMode>(
           FLAGS_index_shortening);
   block_based_options.block_align = FLAGS_block_align;
+  block_based_options.super_block_alignment_size =
+      fLU64::FLAGS_super_block_alignment_size;
+  block_based_options.super_block_alignment_space_overhead_ratio =
+      fLU64::FLAGS_super_block_alignment_space_overhead_ratio;
   options.table_factory.reset(NewBlockBasedTableFactory(block_based_options));
   options.db_write_buffer_size = FLAGS_db_write_buffer_size;
   options.write_buffer_size = FLAGS_write_buffer_size;
